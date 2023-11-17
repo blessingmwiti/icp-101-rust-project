@@ -1,4 +1,4 @@
-# icp_rust_message_board_contract
+# icp_rust_project
 
 ### Requirements
 * rustc 1.64 or higher
