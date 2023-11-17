@@ -3,7 +3,7 @@ function searchProduct() {
     const productId = document.getElementById('productId').value;
 
     // Fetch product details from the Canister using the product ID
-    fetch(`http://127.0.0.1:4943/canister-api-endpoint/get_product`, {
+    fetch(`https://your-canister-id.ic0.app/canister-api-endpoint/get_product`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
