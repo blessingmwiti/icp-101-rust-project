@@ -51,7 +51,6 @@ thread_local! {
 struct ProductPayload {
     name: String,
     origin: String,
-    // Add other relevant fields
 }
 
 #[ic_cdk::query]
@@ -80,7 +79,6 @@ fn add_product(product_payload: ProductPayload) -> Option<Product> {
         id,
         name: product_payload.name,
         origin: product_payload.origin,
-        // Initialize other relevant fields
     };
     do_insert_product(&product);
     Some(product)
@@ -96,7 +94,6 @@ fn update_product(id: u64, payload: ProductPayload) -> Result<Product, Error> {
         Some(mut product) => {
             product.name = payload.name;
             product.origin = payload.origin;
-            // Update other relevant fields
             do_insert_product(&product);
             Ok(product)
         }
@@ -121,5 +118,5 @@ enum Error {
     NotFound { msg: String },
 }
 
-// Need this to generate Candid
+
 ic_cdk::export_candid!();
