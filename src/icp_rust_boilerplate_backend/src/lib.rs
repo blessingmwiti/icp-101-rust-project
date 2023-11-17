@@ -1,7 +1,6 @@
 #[macro_use]
 extern crate serde;
-use candid::{Decode, Encode};
-use ic_cdk::api::time;
+use candid::{CandidType, Decode, Encode};
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager, VirtualMemory};
 use ic_stable_structures::{BoundedStorable, Cell, DefaultMemoryImpl, StableBTreeMap, Storable};
 use std::{borrow::Cow, cell::RefCell};
@@ -13,116 +12,114 @@ type IdCell = Cell<u64, Memory>;
 struct Product {
     id: u64,
     name: String,
-    description: String,
-    manufacturer: String,
-    created_at: u64,
-    updated_at: Option<u64>,
-    ethical_rating: u8,
-    unique_identifier: String, // Unique identifier for anti-counterfeit measures.
+    origin: String,
+    // Add other relevant fields
 }
 
-// Custom error type for handling different error cases.
-#[derive(CandidType, Deserialize, Serialize)]
-enum SupplyChainError {
-    #[serde(rename = "NotFound")]
-    NotFound { msg: String },
-    #[serde(rename = "Counterfeit")]
-    Counterfeit { msg: String },
+impl Storable for Product {
+    fn to_bytes(&self) -> Cow<[u8]> {
+        Cow::Owned(Encode!(self).unwrap())
+    }
+
+    fn from_bytes(bytes: Cow<[u8]>) -> Self {
+        Decode!(bytes.as_ref(), Self).unwrap()
+    }
 }
 
-// Struct to represent a supply chain, holding a map of products.
-#[derive(CandidType, Clone, Serialize, Deserialize, Default)]
-struct SupplyChain {
-    products: BTreeMap<u64, Product>,
+impl BoundedStorable for Product {
+    const MAX_SIZE: u32 = 1024;
+    const IS_FIXED_SIZE: bool = false;
 }
 
-// Functions to handle supply chain operations.
-#[export_name = "canister_query get_product"]
-fn get_product(id: u64) -> Result<Product, SupplyChainError> {
-    match _get_product(id) {
+thread_local! {
+    static MEMORY_MANAGER: RefCell<MemoryManager<DefaultMemoryImpl>> = RefCell::new(
+        MemoryManager::init(DefaultMemoryImpl::default())
+    );
+
+    static PRODUCT_ID_COUNTER: RefCell<IdCell> = RefCell::new(
+        IdCell::init(MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(0))), 0)
+            .expect("Cannot create a counter for products")
+    );
+
+    static PRODUCT_STORAGE: RefCell<StableBTreeMap<u64, Product, Memory>> =
+        RefCell::new(StableBTreeMap::init(
+            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(1)))
+    ));
+}
+
+#[derive(CandidType, Serialize, Deserialize, Default)]
+struct ProductPayload {
+    name: String,
+    origin: String,
+    // Add other relevant fields
+}
+
+#[ic_cdk::query]
+fn get_product(id: u64) -> Result<Product, Error> {
+    match _get_product(&id) {
         Some(product) => Ok(product),
-        None => Err(SupplyChainError::NotFound {
-            msg: format!("Product with id={} not found", id),
+        None => Err(Error::NotFound {
+            msg: format!("A product with id={} not found", id),
         }),
     }
 }
 
-fn _get_product(id: u64) -> Option<Product> {
-    let supply_chain: SupplyChain = storage::get().unwrap_or_default();
-    supply_chain.products.get(&id).cloned()
+fn _get_product(id: &u64) -> Option<Product> {
+    PRODUCT_STORAGE.with(|s| s.borrow().get(id))
 }
 
-#[export_name = "canister_update add_product"]
-fn add_product(product: Product) -> Option<Product> {
-    let mut supply_chain: SupplyChain = storage::get().unwrap_or_default();
-    let id = api::id();
-    let unique_identifier = generate_unique_identifier();
+#[ic_cdk::update]
+fn add_product(product_payload: ProductPayload) -> Option<Product> {
+    let id = PRODUCT_ID_COUNTER
+        .with(|counter| {
+            let current_value = *counter.borrow().get();
+            counter.borrow_mut().set(current_value + 1)
+        })
+        .expect("Cannot increment product id counter");
     let product = Product {
         id,
-        unique_identifier,
-        created_at: api::time(),
-        updated_at: None,
-        ethical_rating: product.ethical_rating,
-        ..product
+        name: product_payload.name,
+        origin: product_payload.origin,
+        // Initialize other relevant fields
     };
-    supply_chain.products.insert(id, product.clone());
-    storage::stable_save((supply_chain,)).unwrap();
+    do_insert_product(&product);
     Some(product)
 }
 
-// Function to generate a unique identifier (you may implement this based on your requirements).
-fn generate_unique_identifier() -> String {
-    // Placeholder implementation, you might want to use a more sophisticated approach.
-    format!("UID-{}", api::id())
+fn do_insert_product(product: &Product) {
+    PRODUCT_STORAGE.with(|service| service.borrow_mut().insert(product.id, product.clone()));
 }
 
-#[export_name = "canister_update verify_product_authenticity"]
-fn verify_product_authenticity(id: u64, unique_identifier: String) -> Result<(), SupplyChainError> {
-    match _get_product(id) {
-        Some(product) => {
-            if product.unique_identifier == unique_identifier {
-                Ok(())
-            } else {
-                Err(SupplyChainError::Counterfeit {
-                    msg: "Product is counterfeit".to_string(),
-                })
-            }
-        }
-        None => Err(SupplyChainError::NotFound {
-            msg: format!("Product with id={} not found", id),
-        }),
-    }
-}
-
-#[export_name = "canister_update update_product"]
-fn update_product(id: u64, updated_product: Product) -> Result<Product, SupplyChainError> {
-    let mut supply_chain: SupplyChain = storage::get().unwrap_or_default();
-    match supply_chain.products.get_mut(&id) {
-        Some(product) => {
-            product.ethical_rating = updated_product.ethical_rating;
-            product.updated_at = Some(api::time());
-            storage::stable_save((supply_chain,)).unwrap();
-            Ok(product.clone())
-        }
-        None => Err(SupplyChainError::NotFound {
-            msg: format!("Product with id={} not found", id),
-        }),
-    }
-}
-
-#[export_name = "canister_update delete_product"]
-fn delete_product(id: u64) -> Result<Product, SupplyChainError> {
-    let mut supply_chain: SupplyChain = storage::get().unwrap_or_default();
-    match supply_chain.products.remove(&id) {
-        Some(product) => {
-            storage::stable_save((supply_chain,)).unwrap();
+#[ic_cdk::update]
+fn update_product(id: u64, payload: ProductPayload) -> Result<Product, Error> {
+    match PRODUCT_STORAGE.with(|service| service.borrow().get(&id)) {
+        Some(mut product) => {
+            product.name = payload.name;
+            product.origin = payload.origin;
+            // Update other relevant fields
+            do_insert_product(&product);
             Ok(product)
         }
-        None => Err(SupplyChainError::NotFound {
-            msg: format!("Product with id={} not found", id),
+        None => Err(Error::NotFound {
+            msg: format!("Couldn't update a product with id={}. Product not found", id),
         }),
     }
 }
 
-// Exporting the Candid interface.
-export_candid!();
+#[ic_cdk::update]
+fn delete_product(id: u64) -> Result<Product, Error> {
+    match PRODUCT_STORAGE.with(|service| service.borrow_mut().remove(&id)) {
+        Some(product) => Ok(product),
+        None => Err(Error::NotFound {
+            msg: format!("Couldn't delete a product with id={}. Product not found", id),
+        }),
+    }
+}
+
+#[derive(CandidType, Deserialize, Serialize)]
+enum Error {
+    NotFound { msg: String },
+}
+
+// Need this to generate Candid
+ic_cdk::export_candid!();

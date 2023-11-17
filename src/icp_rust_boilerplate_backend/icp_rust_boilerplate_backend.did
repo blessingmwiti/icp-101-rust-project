@@ -1,0 +1,10 @@
+type Error = variant { NotFound : record { msg : text } };
+type Product = record { id : nat64; name : text; origin : text };
+type ProductPayload = record { name : text; origin : text };
+type Result = variant { Ok : Product; Err : Error };
+service : {
+  add_product : (ProductPayload) -> (opt Product);
+  delete_product : (nat64) -> (Result);
+  get_product : (nat64) -> (Result) query;
+  update_product : (nat64, ProductPayload) -> (Result);
+}
