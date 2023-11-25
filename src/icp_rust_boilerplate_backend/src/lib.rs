@@ -13,16 +13,15 @@ struct Product {
     id: u64,
     name: String,
     origin: String,
-    // Add other relevant fields
 }
 
 impl Storable for Product {
     fn to_bytes(&self) -> Cow<[u8]> {
-        Cow::Owned(Encode!(self).unwrap())
+        Cow::Owned(Encode!(self).expect("Failed to serialize Product"))
     }
 
     fn from_bytes(bytes: Cow<[u8]>) -> Self {
-        Decode!(bytes.as_ref(), Self).unwrap()
+        Decode!(bytes.as_ref(), Self).expect("Failed to deserialize Product")
     }
 }
 
@@ -44,7 +43,7 @@ thread_local! {
     static PRODUCT_STORAGE: RefCell<StableBTreeMap<u64, Product, Memory>> =
         RefCell::new(StableBTreeMap::init(
             MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(1)))
-    ));
+        ));
 }
 
 #[derive(CandidType, Serialize, Deserialize, Default)]
@@ -55,68 +54,72 @@ struct ProductPayload {
 
 #[ic_cdk::query]
 fn get_product(id: u64) -> Result<Product, Error> {
-    match _get_product(&id) {
-        Some(product) => Ok(product),
-        None => Err(Error::NotFound {
-            msg: format!("A product with id={} not found", id),
-        }),
-    }
+    Ok(_get_product(&id).ok_or(Error::NotFound {
+        msg: format!("A product with id={} not found", id),
+    })?)
 }
 
 fn _get_product(id: &u64) -> Option<Product> {
-    PRODUCT_STORAGE.with(|s| s.borrow().get(id))
+    PRODUCT_STORAGE.with(|s| s.borrow().get(id).cloned())
 }
 
 #[ic_cdk::update]
-fn add_product(product_payload: ProductPayload) -> Option<Product> {
+fn add_product(product_payload: ProductPayload) -> Result<Product, Error> {
     let id = PRODUCT_ID_COUNTER
         .with(|counter| {
-            let current_value = *counter.borrow().get();
-            counter.borrow_mut().set(current_value + 1)
-        })
-        .expect("Cannot increment product id counter");
+            let current_value = counter.borrow().get();
+            counter.borrow_mut().set(current_value.checked_add(1).ok_or(Error::IdOverflow)?);
+            Ok(current_value)
+        })?;
+
     let product = Product {
         id,
         name: product_payload.name,
         origin: product_payload.origin,
     };
     do_insert_product(&product);
-    Some(product)
+    Ok(product)
 }
 
 fn do_insert_product(product: &Product) {
-    PRODUCT_STORAGE.with(|service| service.borrow_mut().insert(product.id, product.clone()));
+    PRODUCT_STORAGE.with(|service| {
+        service.borrow_mut().insert(product.id, product.clone());
+    });
 }
 
 #[ic_cdk::update]
 fn update_product(id: u64, payload: ProductPayload) -> Result<Product, Error> {
-    match PRODUCT_STORAGE.with(|service| service.borrow().get(&id)) {
-        Some(mut product) => {
-            product.name = payload.name;
-            product.origin = payload.origin;
-            do_insert_product(&product);
-            Ok(product)
-        }
-        None => Err(Error::NotFound {
-            msg: format!("Couldn't update a product with id={}. Product not found", id),
-        }),
-    }
+    let product = PRODUCT_STORAGE.with(|service| {
+        service
+            .borrow_mut()
+            .entry(id)
+            .and_modify(|entry| {
+                entry.name = payload.name.clone();
+                entry.origin = payload.origin.clone();
+            })
+            .clone()
+    });
+
+    Ok(product.ok_or(Error::NotFound {
+        msg: format!("Couldn't update a product with id={}. Product not found", id),
+    })?)
 }
 
 #[ic_cdk::update]
 fn delete_product(id: u64) -> Result<Product, Error> {
-    match PRODUCT_STORAGE.with(|service| service.borrow_mut().remove(&id)) {
-        Some(product) => Ok(product),
-        None => Err(Error::NotFound {
-            msg: format!("Couldn't delete a product with id={}. Product not found", id),
-        }),
-    }
+    let product = PRODUCT_STORAGE.with(|service| {
+        service.borrow_mut().remove(&id)
+    });
+
+    Ok(product.ok_or(Error::NotFound {
+        msg: format!("Couldn't delete a product with id={}. Product not found", id),
+    })?)
 }
 
 #[derive(CandidType, Deserialize, Serialize)]
 enum Error {
     NotFound { msg: String },
+    IdOverflow,
 }
-
 
 ic_cdk::export_candid!();
