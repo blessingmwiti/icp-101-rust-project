@@ -1,9 +1,13 @@
-type Error = variant { NotFound : record { msg : text } };
-type Product = record { id : nat64; name : text; origin : text };
+type Error = variant {
+  ValidationFailed : record { content : text };
+  NotFound : record { msg : text };
+  AuthenticationFailed : record { msg : text };
+};
+type Product = record { id : nat64; owner : text; name : text; origin : text };
 type ProductPayload = record { name : text; origin : text };
 type Result = variant { Ok : Product; Err : Error };
 service : {
-  add_product : (ProductPayload) -> (opt Product);
+  add_product : (ProductPayload) -> (Result);
   delete_product : (nat64) -> (Result);
   get_product : (nat64) -> (Result) query;
   update_product : (nat64, ProductPayload) -> (Result);
